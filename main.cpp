@@ -24,8 +24,17 @@ typedef struct vec2 {
     vec2 operator* (float v) {
         return { x * v, y * v };
     }
+    vec2 operator/ (float v) {
+        return { x / v, y / v };
+    }
     float magnitude() {
         return sqrt(*this * *this);
+    }
+    vec2 normalized() {
+        if (*this * *this == 1)
+            return *this;
+        else
+            return *this / magnitude();
     }
 } vec2;
 
@@ -82,6 +91,43 @@ SDL_Window *window;
 void draw_pixel(vec2 pos) {
     SDL_RenderDrawPoint(renderer, pos.x, pos.y);
 }
+void draw_circle(int32_t centreX, int32_t centreY, int32_t radius)
+{
+   const int32_t diameter = (radius * 2);
+
+   int32_t x = (radius - 1);
+   int32_t y = 0;
+   int32_t tx = 1;
+   int32_t ty = 1;
+   int32_t error = (tx - diameter);
+
+   while (x >= y)
+   {
+      //  Each of the following renders an octant of the circle
+      SDL_RenderDrawPoint(renderer, centreX + x, centreY - y);
+      SDL_RenderDrawPoint(renderer, centreX + x, centreY + y);
+      SDL_RenderDrawPoint(renderer, centreX - x, centreY - y);
+      SDL_RenderDrawPoint(renderer, centreX - x, centreY + y);
+      SDL_RenderDrawPoint(renderer, centreX + y, centreY - x);
+      SDL_RenderDrawPoint(renderer, centreX + y, centreY + x);
+      SDL_RenderDrawPoint(renderer, centreX - y, centreY - x);
+      SDL_RenderDrawPoint(renderer, centreX - y, centreY + x);
+
+      if (error <= 0)
+      {
+         ++y;
+         error += ty;
+         ty += 2;
+      }
+
+      if (error > 0)
+      {
+         --x;
+         tx += 2;
+         error += (tx - diameter);
+      }
+   }
+}
 
 /* -------------------------
  *       Drawable Stuff
@@ -108,9 +154,9 @@ void destroy_drawables() {
 }
 
 float get_min_dist(vec2 pos) {
-    float min = 10000;
+    float min { 10000.f };
     for (auto d : drawables) {
-        float newDist = d->sdf(pos);
+        float newDist { d->sdf(pos) };
         if (newDist < min) {
             min = newDist;
             if (min <= 0)
@@ -125,18 +171,29 @@ float get_min_dist(vec2 pos) {
  * -------------------------
 */
 
+#define LIGHT_RAY_MAX_DEPTH 100
+
 std::vector<Light*> lights;
 void create_lights() {
     lights.emplace_back(new Light({ WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 }, 100.f));
 }
-#define LIGHT_DIR_COUNT 720
+#define LIGHT_DIR_COUNT 3600
 vec2 light_directions[LIGHT_DIR_COUNT];
 
-void march_ray_light(vec2 pos, vec2 delta, int depth = 0, float threshold = 0.1f) {
+void march_ray_light(vec2 pos, vec2 delta, float threshold = 0.1f) {
     float min;
+    int depth { 0 };
+    vec2 origin{ pos };
     do {
         min = get_min_dist(pos);
-    } while (min >= threshold)
+        if (min <= threshold) {
+            draw_pixel(pos);
+            break;
+        }
+        pos = pos + delta.normalized() * min;
+        depth++;
+    } while (depth < LIGHT_RAY_MAX_DEPTH && min >= threshold);
+    //SDL_RenderDrawLine(renderer, (pos.x > WINDOW_WIDTH) ? WINDOW_WIDTH : pos.x, (pos.y > WINDOW_HEIGHT) ? WINDOW_HEIGHT : pos.y, origin.x, origin.y);
 }
 
 void draw() {
@@ -160,11 +217,21 @@ void draw() {
         }
     }
     */
+
+    // displaying the circles
+    for (auto d : drawables) {
+        draw_circle(d->pos.x, d->pos.y, static_cast<Circle*>(d)->radius);
+    }
     
     // ray marching for each light
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     for (auto l : lights) {
         for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
             march_ray_light(l->pos, light_directions[i]);
+
+            //SDL_RenderDrawLineF(renderer, l->pos.x, l->pos.y, l->pos.x + light_directions[i].x * 100, l->pos.y + light_directions[i].y * 100);
+            //printf("\rcompleted to %d percent", static_cast<float>(i) / LIGHT_DIR_COUNT * 100.f);
+            //fflush(stdout);
         }
     }
 }
@@ -176,10 +243,11 @@ int main() {
     SDL_CreateWindowAndRenderer(WINDOW_WIDTH, WINDOW_HEIGHT, 0, &window, &renderer);
 
     create_drawables();
+    create_lights();
     
     // pre-calculate the light directions
     for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
-        light_directions[i] = { static_cast<float>(cos(i / LIGHT_DIR_COUNT * 2 * PI)), static_cast<float>(sin(i / LIGHT_DIR_COUNT * 2 * PI)) };
+        light_directions[i] = { static_cast<float>(cos(static_cast<float>(i) / LIGHT_DIR_COUNT * 2 * PI)), static_cast<float>(sin(static_cast<float>(i) / LIGHT_DIR_COUNT * 2 * PI)) };
     }
 
     // render loop
@@ -201,7 +269,7 @@ int main() {
         
         endTime = SDL_GetTicks64();
         auto deltaTime = endTime - startTime;
-        printf("\rDelta Time is: %d", deltaTime);
+        printf("\rDelta Time is: %d     ", deltaTime);
         fflush(stdout);
     }
 
