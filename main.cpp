@@ -1,7 +1,8 @@
 #include <math.h>
+#include <stdio.h>
+#include <ctime>
 #include <vector>
 #include <random>
-#include <ctime>
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -106,6 +107,7 @@ void draw() {
     }
 }
 
+uint64_t startTime, endTime;
 int main() {
     // initialize sdl
     SDL_Init(SDL_INIT_VIDEO);
@@ -115,6 +117,8 @@ int main() {
 
     // render loop
     while (1) {
+        startTime = SDL_GetTicks64();
+    
         // poll window and quit if needed
         if (SDL_PollEvent(&event) && event.type == SDL_QUIT)
             break;
@@ -127,6 +131,11 @@ int main() {
         draw();
 
         SDL_RenderPresent(renderer);
+        
+        endTime = SDL_GetTicks64();
+        auto deltaTime = endTime - startTime;
+        printf("\rDelta Time is: %d", deltaTime);
+        fflush(stdout);
     }
 
     destroy_drawables();
