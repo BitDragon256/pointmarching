@@ -4,6 +4,8 @@
 #include <vector>
 #include <random>
 
+#define PI 3.14159265
+
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 
@@ -42,10 +44,23 @@ public:
     float sdf(vec2 p) override {
         return (pos - p).magnitude() - radius;
     }
-    Circle(vec2 pos, float radius) : Drawable(pos), radius(radius) {}
+    Circle(vec2 pos, float radius) : Drawable{ pos }, radius{ radius } {}
 };
 
-// important rendering stuff
+class Light : public Drawable {
+public:
+    float brightness;
+    float sdf(vec2 p) override {
+        return (pos - p).magnitude();
+    }
+    Light(vec2 pos, float brightness) : Drawable{ pos }, brightness{ brightness } {}
+};
+
+
+/* -------------------------
+ *      Rendering Stuff
+ * -------------------------
+*/
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
@@ -68,6 +83,11 @@ void draw_pixel(vec2 pos) {
     SDL_RenderDrawPoint(renderer, pos.x, pos.y);
 }
 
+/* -------------------------
+ *       Drawable Stuff
+ * -------------------------
+*/
+
 #define RANDOM_CIRCLE_COUNT 5
 #define RANDOM_CIRCLE_MIN_SIZE 20
 #define RANDOM_CIRCLE_MAX_SIZE 50
@@ -87,7 +107,41 @@ void destroy_drawables() {
         delete d;
 }
 
+float get_min_dist(vec2 pos) {
+    float min = 10000;
+    for (auto d : drawables) {
+        float newDist = d->sdf(pos);
+        if (newDist < min) {
+            min = newDist;
+            if (min <= 0)
+                break;
+        }
+    }
+    return min;
+}
+
+/* -------------------------
+ *        Light Stuff
+ * -------------------------
+*/
+
+std::vector<Light*> lights;
+void create_lights() {
+    lights.emplace_back(new Light({ WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 }, 100.f));
+}
+#define LIGHT_DIR_COUNT 720
+vec2 light_directions[LIGHT_DIR_COUNT];
+
+void march_ray_light(vec2 pos, vec2 delta, int depth = 0, float threshold = 0.1f) {
+    float min;
+    do {
+        min = get_min_dist(pos);
+    } while (min >= threshold)
+}
+
 void draw() {
+    // point marching for each pixel on the screen
+    /*
     vec2 it;
     for (it.x = 0; it.x <= WINDOW_WIDTH; it.x++) {
         for (it.y = 0; it.y <= WINDOW_HEIGHT; it.y++) {
@@ -105,6 +159,14 @@ void draw() {
             }
         }
     }
+    */
+    
+    // ray marching for each light
+    for (auto l : lights) {
+        for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
+            march_ray_light(l->pos, light_directions[i]);
+        }
+    }
 }
 
 uint64_t startTime, endTime;
@@ -114,6 +176,11 @@ int main() {
     SDL_CreateWindowAndRenderer(WINDOW_WIDTH, WINDOW_HEIGHT, 0, &window, &renderer);
 
     create_drawables();
+    
+    // pre-calculate the light directions
+    for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
+        light_directions[i] = { static_cast<float>(cos(i / LIGHT_DIR_COUNT * 2 * PI)), static_cast<float>(sin(i / LIGHT_DIR_COUNT * 2 * PI)) };
+    }
 
     // render loop
     while (1) {
