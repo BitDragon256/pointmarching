@@ -9,6 +9,8 @@
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 
+#include <SDL2_gfxPrimitives.h>
+
 typedef struct vec2 {
     float x, y;
 
@@ -171,7 +173,7 @@ float get_min_dist(vec2 pos) {
  * -------------------------
 */
 
-#define LIGHT_RAY_MAX_DEPTH 100
+#define LIGHT_RAY_MAX_DEPTH 40
 
 std::vector<Light*> lights;
 void create_lights() {
@@ -180,7 +182,7 @@ void create_lights() {
 #define LIGHT_DIR_COUNT 3600
 vec2 light_directions[LIGHT_DIR_COUNT];
 
-void march_ray_light(vec2 pos, vec2 delta, float threshold = 0.1f) {
+void march_ray_light(vec2 pos, vec2 delta, float threshold = 0.01f) {
     float min;
     int depth { 0 };
     vec2 origin{ pos };
@@ -196,6 +198,7 @@ void march_ray_light(vec2 pos, vec2 delta, float threshold = 0.1f) {
     //SDL_RenderDrawLine(renderer, (pos.x > WINDOW_WIDTH) ? WINDOW_WIDTH : pos.x, (pos.y > WINDOW_HEIGHT) ? WINDOW_HEIGHT : pos.y, origin.x, origin.y);
 }
 
+double deltaTimeD;
 void draw() {
     // point marching for each pixel on the screen
     /*
@@ -220,12 +223,13 @@ void draw() {
 
     // displaying the circles
     for (auto d : drawables) {
-        draw_circle(d->pos.x, d->pos.y, static_cast<Circle*>(d)->radius);
+        filledCircleRGBA(renderer, d->pos.x, d->pos.y, static_cast<Circle*>(d)->radius, 0, 0, 0, 255);
     }
-    
+
     // ray marching for each light
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     for (auto l : lights) {
+        draw_circle(l->pos.x, l->pos.y, 10);
         for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
             march_ray_light(l->pos, light_directions[i]);
 
@@ -236,6 +240,21 @@ void draw() {
     }
 }
 
+#define PLAYER_SPEED 70
+void move_player(Drawable *player) {
+    auto keyboard = SDL_GetKeyboardState(NULL);
+    
+    if (keyboard[SDL_SCANCODE_W] == SDL_PRESSED)
+        player->pos.y -= PLAYER_SPEED * deltaTimeD;
+    if (keyboard[SDL_SCANCODE_S] == SDL_PRESSED)
+        player->pos.y += PLAYER_SPEED * deltaTimeD;
+    if (keyboard[SDL_SCANCODE_D] == SDL_PRESSED)
+        player->pos.x += PLAYER_SPEED * deltaTimeD;
+    if (keyboard[SDL_SCANCODE_A] == SDL_PRESSED)
+        player->pos.x -= PLAYER_SPEED * deltaTimeD;
+}
+
+uint64_t deltaTime;
 uint64_t startTime, endTime;
 int main() {
     // initialize sdl
@@ -250,6 +269,10 @@ int main() {
         light_directions[i] = { static_cast<float>(cos(static_cast<float>(i) / LIGHT_DIR_COUNT * 2 * PI)), static_cast<float>(sin(static_cast<float>(i) / LIGHT_DIR_COUNT * 2 * PI)) };
     }
 
+    // workaround player
+    drawables.emplace_back(new Circle{ { WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 }, 30 });
+    Drawable *player = drawables.back();
+
     // render loop
     while (1) {
         startTime = SDL_GetTicks64();
@@ -258,6 +281,8 @@ int main() {
         if (SDL_PollEvent(&event) && event.type == SDL_QUIT)
             break;
         
+        move_player(player);
+
         SDL_SetRenderDrawColor(renderer, DEF_BG_COL_R, DEF_BG_COL_G, DEF_BG_COL_B, DEF_BG_COL_A);
         SDL_RenderClear(renderer);
         SDL_SetRenderDrawColor(renderer, DEF_COL_R, DEF_COL_G, DEF_COL_B, DEF_COL_A);
@@ -268,8 +293,9 @@ int main() {
         SDL_RenderPresent(renderer);
         
         endTime = SDL_GetTicks64();
-        auto deltaTime = endTime - startTime;
-        printf("\rDelta Time is: %d     ", deltaTime);
+        deltaTime = endTime - startTime;
+        deltaTimeD = deltaTime / 1000.0;
+        printf("\rDelta Time is: %lli     ", deltaTime);
         fflush(stdout);
     }
 
