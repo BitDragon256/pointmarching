@@ -3,8 +3,16 @@
 #include <ctime>
 #include <vector>
 #include <random>
+#include <array>
+#include <algorithm>
 
 #define PI 3.14159265
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
+float clip(float n, float lower, float upper) {
+    return std::max(lower, std::min(n, upper));
+}
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -38,6 +46,23 @@ typedef struct vec2 {
         else
             return *this / magnitude();
     }
+    void normalize() {
+        if (*this * *this == 1)
+            return;
+        *this = *this / magnitude();
+    }
+    vec2 abs() {
+        return { std::abs(x), std::abs(y) };
+    }
+    float max() {
+        return std::max(x, y);
+    }
+    float min() {
+        return std::min(x, y);
+    }
+    static vec2 max(vec2 a, vec2 b) {
+        return { std::max(a.x, b.x), std::max(a.y, b.y) };
+    }
 } vec2;
 
 class Drawable {
@@ -56,6 +81,17 @@ public:
         return (pos - p).magnitude() - radius;
     }
     Circle(vec2 pos, float radius) : Drawable{ pos }, radius{ radius } {}
+};
+
+class Rectangle : public Drawable {
+public:
+    vec2 size;
+    float sdf(vec2 p) override {
+        p = pos - p;
+        vec2 d = p.abs() - size / 2;
+        return vec2::max(d, { 0,0 }).magnitude() + std::min(std::max(d.x,d.y),0.f);
+    }
+    Rectangle(vec2 pos, vec2 size) : Drawable{ pos }, size{ size } {}
 };
 
 class Light : public Drawable {
@@ -144,11 +180,13 @@ std::vector<Drawable*> drawables;
 void create_drawables() {
     srand(time(0));
 
-    for (int i = 0; i < RANDOM_CIRCLE_COUNT; i++) {
-        int radius = rand() % (RANDOM_CIRCLE_MAX_SIZE - RANDOM_CIRCLE_MIN_SIZE) + RANDOM_CIRCLE_MIN_SIZE;
-        vec2 pos = { rand() % (WINDOW_WIDTH - 2 * radius) + radius, rand() % (WINDOW_HEIGHT - 2 * radius) + radius };
-        drawables.emplace_back(new Circle{ pos, radius });
-    }
+    // for (int i = 0; i < RANDOM_CIRCLE_COUNT; i++) {
+    //     int radius = rand() % (RANDOM_CIRCLE_MAX_SIZE - RANDOM_CIRCLE_MIN_SIZE) + RANDOM_CIRCLE_MIN_SIZE;
+    //     vec2 pos = { rand() % (WINDOW_WIDTH - 2 * radius) + radius, rand() % (WINDOW_HEIGHT - 2 * radius) + radius };
+    //     drawables.emplace_back(new Circle{ pos, radius });
+    // }
+    
+    drawables.emplace_back(new Rectangle{ {WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2}, {200, 100} });
 }
 void destroy_drawables() {
     for (auto d : drawables)
@@ -173,7 +211,7 @@ float get_min_dist(vec2 pos) {
  * -------------------------
 */
 
-#define LIGHT_RAY_MAX_DEPTH 40
+#define LIGHT_RAY_MAX_DEPTH 50
 
 std::vector<Light*> lights;
 void create_lights() {
@@ -182,21 +220,48 @@ void create_lights() {
 #define LIGHT_DIR_COUNT 3600
 vec2 light_directions[LIGHT_DIR_COUNT];
 
-void march_ray_light(vec2 pos, vec2 delta, float threshold = 0.01f) {
+typedef struct RayHitInfo {
+    vec2 pos;
+    Drawable* drawable;
+    float distance;
+} RayHitInfo;
+
+bool march_ray(vec2 pos, vec2 delta, RayHitInfo* hit, float maxDepth = 100.f, float threshold = 0.01f, uint16_t maxSteps = 50) {
+    float min;
+    int depth { 0 };
+    delta.normalize();
+    vec2 origin{ pos };
+    do {
+        min = get_min_dist(pos);
+        if (min <= threshold) {
+            break;
+        }
+        pos = pos + delta * min;
+        hit->distance += min;
+        depth++;
+    } while (depth < maxSteps && clip(pos.x, 0, WINDOW_WIDTH) == pos.x && clip(pos.y, 0, WINDOW_HEIGHT) == pos.y && min >= threshold);
+}
+
+vec2 march_ray_light(vec2 pos, vec2 delta, float threshold = 0.01f) {
     float min;
     int depth { 0 };
     vec2 origin{ pos };
     do {
         min = get_min_dist(pos);
         if (min <= threshold) {
-            draw_pixel(pos);
             break;
         }
         pos = pos + delta.normalized() * min;
         depth++;
-    } while (depth < LIGHT_RAY_MAX_DEPTH && min >= threshold);
+    } while (depth < LIGHT_RAY_MAX_DEPTH && clip(pos.x, 0, WINDOW_WIDTH) == pos.x && clip(pos.y, 0, WINDOW_HEIGHT) == pos.y && min >= threshold);
     //SDL_RenderDrawLine(renderer, (pos.x > WINDOW_WIDTH) ? WINDOW_WIDTH : pos.x, (pos.y > WINDOW_HEIGHT) ? WINDOW_HEIGHT : pos.y, origin.x, origin.y);
+    return pos;
 }
+
+struct Polygon {
+    std::vector<int16_t> posX;
+    std::vector<int16_t> posY;
+};
 
 double deltaTimeD;
 void draw() {
@@ -222,26 +287,39 @@ void draw() {
     */
 
     // displaying the circles
-    for (auto d : drawables) {
-        filledCircleRGBA(renderer, d->pos.x, d->pos.y, static_cast<Circle*>(d)->radius, 0, 0, 0, 255);
-    }
+    //for (auto d : drawables) {
+    //    filledCircleRGBA(renderer, d->pos.x, d->pos.y, static_cast<Circle*>(d)->radius, 0, 0, 0, 255);
+    //}
 
     // ray marching for each light
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     for (auto l : lights) {
-        draw_circle(l->pos.x, l->pos.y, 10);
+        std::vector<Polygon> polygons { 1 };
+        
         for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
-            march_ray_light(l->pos, light_directions[i]);
-
-            //SDL_RenderDrawLineF(renderer, l->pos.x, l->pos.y, l->pos.x + light_directions[i].x * 100, l->pos.y + light_directions[i].y * 100);
-            //printf("\rcompleted to %d percent", static_cast<float>(i) / LIGHT_DIR_COUNT * 100.f);
-            //fflush(stdout);
+            auto pos = march_ray_light(l->pos, light_directions[i]);
+            
+            polygons.back().posX.push_back(pos.x);
+            polygons.back().posY.push_back(pos.y);
         }
+        for (auto p : polygons) {
+            filledPolygonRGBA(renderer, p.posX.data(), p.posY.data(), p.posX.size(), 255, 255, 255, 255);
+            
+            // std::vector<SDL_Point> points;
+            // for (int i = 0; i < p.posX.size(); i++) {
+            //     if (p.posX[i] == 0 || p.posY[i] == 0)
+            //         continue;
+            //     points.push_back( { p.posX[i], p.posY[i] } );
+            // }
+            // SDL_RenderDrawLines(renderer, points.data(), points.size());
+        }
+        filledCircleRGBA(renderer, l->pos.x, l->pos.y, 10, 0, 255, 0, 255);
     }
 }
 
 #define PLAYER_SPEED 70
 void move_player(Drawable *player) {
+    SDL_PumpEvents();
     auto keyboard = SDL_GetKeyboardState(NULL);
     
     if (keyboard[SDL_SCANCODE_W] == SDL_PRESSED)
@@ -252,6 +330,9 @@ void move_player(Drawable *player) {
         player->pos.x += PLAYER_SPEED * deltaTimeD;
     if (keyboard[SDL_SCANCODE_A] == SDL_PRESSED)
         player->pos.x -= PLAYER_SPEED * deltaTimeD;
+        
+    if (keyboard[SDL_SCANCODE_Q] == SDL_PRESSED)
+        exit;
 }
 
 uint64_t deltaTime;
@@ -271,7 +352,7 @@ int main() {
 
     // workaround player
     drawables.emplace_back(new Circle{ { WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 }, 30 });
-    Drawable *player = drawables.back();
+    Drawable *player = lights.front();
 
     // render loop
     while (1) {
