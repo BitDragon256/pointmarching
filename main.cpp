@@ -72,6 +72,7 @@ public:
         return 0;
     }
     Drawable(vec2 pos) : pos{ pos } {}
+    ~Drawable() {}
 };
 
 class Circle : public Drawable {
@@ -193,17 +194,23 @@ void destroy_drawables() {
         delete d;
 }
 
-float get_min_dist(vec2 pos) {
+float get_min_dist(vec2 pos, Drawable* drawable) {
     float min { 10000.f };
     for (auto d : drawables) {
         float newDist { d->sdf(pos) };
         if (newDist < min) {
             min = newDist;
-            if (min <= 0)
+            drawable = d;
+            if (min <= 0) {
                 break;
+            }
         }
     }
     return min;
+}
+
+float get_min_dist(vec2 pos) {
+    return get_min_dist(pos, nullptr);
 }
 
 /* -------------------------
@@ -224,28 +231,31 @@ typedef struct RayHitInfo {
     vec2 pos;
     Drawable* drawable;
     float distance;
+    bool hit;
 } RayHitInfo;
 
 bool march_ray(vec2 pos, vec2 delta, RayHitInfo* hit, float maxDepth = 100.f, float threshold = 0.01f, uint16_t maxSteps = 50) {
     float min;
     int depth { 0 };
     delta.normalize();
-    vec2 origin{ pos };
+    hit->hit = false;
     do {
-        min = get_min_dist(pos);
+        min = get_min_dist(pos, hit->drawable);
         if (min <= threshold) {
+            hit->hit = true;
             break;
         }
         pos = pos + delta * min;
         hit->distance += min;
         depth++;
     } while (depth < maxSteps && clip(pos.x, 0, WINDOW_WIDTH) == pos.x && clip(pos.y, 0, WINDOW_HEIGHT) == pos.y && min >= threshold);
+    hit->pos = pos;
+    return hit->hit;
 }
 
 vec2 march_ray_light(vec2 pos, vec2 delta, float threshold = 0.01f) {
     float min;
     int depth { 0 };
-    vec2 origin{ pos };
     do {
         min = get_min_dist(pos);
         if (min <= threshold) {
@@ -297,10 +307,12 @@ void draw() {
         std::vector<Polygon> polygons { 1 };
         
         for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
-            auto pos = march_ray_light(l->pos, light_directions[i]);
+            RayHitInfo hit;
+            march_ray(l->pos, light_directions[i], &hit);
+            //auto pos = march_ray_light(l->pos, light_directions[i]);
             
-            polygons.back().posX.push_back(pos.x);
-            polygons.back().posY.push_back(pos.y);
+            polygons.back().posX.push_back(hit.pos.x);
+            polygons.back().posY.push_back(hit.pos.y);
         }
         for (auto p : polygons) {
             filledPolygonRGBA(renderer, p.posX.data(), p.posY.data(), p.posX.size(), 255, 255, 255, 255);
@@ -332,7 +344,7 @@ void move_player(Drawable *player) {
         player->pos.x -= PLAYER_SPEED * deltaTimeD;
         
     if (keyboard[SDL_SCANCODE_Q] == SDL_PRESSED)
-        exit;
+        exit(0);
 }
 
 uint64_t deltaTime;
