@@ -5,6 +5,7 @@
 #include <random>
 #include <array>
 #include <algorithm>
+#include <stdexcept>
 
 #define PI 3.14159265
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -22,6 +23,8 @@ float clip(float n, float lower, float upper) {
 typedef struct vec2 {
     float x, y;
 
+    vec2() : x{0}, y{0} {}
+    vec2(float x, float y) : x{x}, y{y} {}
     vec2 operator+ (vec2 o) {
         return { x + o.x, y + o.y };
     }
@@ -39,6 +42,9 @@ typedef struct vec2 {
     }
     float magnitude() {
         return sqrt(*this * *this);
+    }
+    float sqr_mag() {
+        return *this * *this;
     }
     vec2 normalized() {
         if (*this * *this == 1)
@@ -173,19 +179,19 @@ void draw_circle(int32_t centreX, int32_t centreY, int32_t radius)
  * -------------------------
 */
 
-#define RANDOM_CIRCLE_COUNT 5
-#define RANDOM_CIRCLE_MIN_SIZE 20
-#define RANDOM_CIRCLE_MAX_SIZE 50
+#define RANDOM_CIRCLE_COUNT 50
+#define RANDOM_CIRCLE_MIN_SIZE 10
+#define RANDOM_CIRCLE_MAX_SIZE 30
 
 std::vector<Drawable*> drawables;
 void create_drawables() {
     srand(time(0));
 
-    // for (int i = 0; i < RANDOM_CIRCLE_COUNT; i++) {
-    //     int radius = rand() % (RANDOM_CIRCLE_MAX_SIZE - RANDOM_CIRCLE_MIN_SIZE) + RANDOM_CIRCLE_MIN_SIZE;
-    //     vec2 pos = { rand() % (WINDOW_WIDTH - 2 * radius) + radius, rand() % (WINDOW_HEIGHT - 2 * radius) + radius };
-    //     drawables.emplace_back(new Circle{ pos, radius });
-    // }
+    for (int i = 0; i < RANDOM_CIRCLE_COUNT; i++) {
+        int radius = rand() % (RANDOM_CIRCLE_MAX_SIZE - RANDOM_CIRCLE_MIN_SIZE) + RANDOM_CIRCLE_MIN_SIZE;
+        vec2 pos = { rand() % (WINDOW_WIDTH - 2 * radius) + radius, rand() % (WINDOW_HEIGHT - 2 * radius) + radius };
+        drawables.emplace_back(new Circle{ pos, radius });
+    }
     
     drawables.emplace_back(new Rectangle{ {WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2}, {200, 100} });
 }
@@ -194,13 +200,13 @@ void destroy_drawables() {
         delete d;
 }
 
-float get_min_dist(vec2 pos, Drawable* drawable) {
+float get_min_dist(vec2 pos, Drawable **drawable) {
     float min { 10000.f };
     for (auto d : drawables) {
         float newDist { d->sdf(pos) };
         if (newDist < min) {
             min = newDist;
-            drawable = d;
+            *drawable = d;
             if (min <= 0) {
                 break;
             }
@@ -240,7 +246,7 @@ bool march_ray(vec2 pos, vec2 delta, RayHitInfo* hit, float maxDepth = 100.f, fl
     delta.normalize();
     hit->hit = false;
     do {
-        min = get_min_dist(pos, hit->drawable);
+        min = get_min_dist(pos, &hit->drawable);
         if (min <= threshold) {
             hit->hit = true;
             break;
@@ -249,6 +255,119 @@ bool march_ray(vec2 pos, vec2 delta, RayHitInfo* hit, float maxDepth = 100.f, fl
         hit->distance += min;
         depth++;
     } while (depth < maxSteps && clip(pos.x, 0, WINDOW_WIDTH) == pos.x && clip(pos.y, 0, WINDOW_HEIGHT) == pos.y && min >= threshold);
+    hit->pos = pos;
+    return hit->hit;
+}
+
+float interpolate(float a, float b, float t) {
+    return a * (1 - t) + b * t;
+}
+float four_point_ip(float a, float b, float c, float d, vec2 delta, vec2 pointDelta) {
+    return interpolate(
+        interpolate(a, b, delta.x / pointDelta.x),
+        interpolate(d, c, delta.x / pointDelta.x),
+        delta.y / pointDelta.y
+    );
+}
+vec2 abs_point_around(vec2 pos, int index) {
+    switch(index) {
+        case 0:
+            return vec2( floorf(pos.x), floorf(pos.y) );
+        case 1:
+            return vec2( ceilf (pos.x), floorf(pos.y) );
+        case 2:
+            return vec2( ceilf (pos.x), ceilf (pos.y) );
+        case 3:
+            return vec2( floorf(pos.x), ceilf (pos.y) );
+        default:
+            return {};
+    }
+}
+
+#define PM_CACHE_PRECISION 1
+#define PM_CACHE_WIDTH PM_CACHE_PRECISION * WINDOW_WIDTH
+#define PM_CACHE_HEIGHT PM_CACHE_PRECISION * WINDOW_HEIGHT
+#define PM_CACHE_SIZE PM_CACHE_HEIGHT * PM_CACHE_WIDTH
+
+uint64_t get_pm_index(vec2 pos) {
+    return static_cast<uint64_t>(pos.x + pos.y * PM_CACHE_WIDTH);
+}
+
+float pointmarchingCache[PM_CACHE_SIZE];
+Drawable *pointmarchingDrawableCache[PM_CACHE_SIZE];
+float pm_cache(vec2 pos) {
+    pos = pos * PM_CACHE_PRECISION;
+    if (clip(pos.x, 0, PM_CACHE_WIDTH - 1) != pos.x || clip(pos.y, 0, PM_CACHE_HEIGHT - 1) != pos.y) {
+        printf("\ncache out of bounds: %f %f\n", pos.x, pos.y);
+        fflush(stdout);
+        throw std::runtime_error("cache out of bounds");
+    }
+
+    // return pointmarchingCache[static_cast<int64_t>(pos.x + pos.y * PM_CACHE_WIDTH)];
+    float a = pointmarchingCache[get_pm_index( { floor(pos.x), floor(pos.y)} )];
+    float b = pointmarchingCache[get_pm_index( { ceil (pos.x), floor(pos.y)} )];
+    float c = pointmarchingCache[get_pm_index( { ceil (pos.x), ceil (pos.y)} )];
+    float d = pointmarchingCache[get_pm_index( { floor(pos.x), ceil (pos.y)} )];
+    vec2 origin = { floor(pos.x), floor(pos.y) };
+    vec2 delta = pos - origin;
+    float pointDelta = { 1.f / PM_CACHE_PRECISION };
+    return four_point_ip(a, b, c, d, delta, { pointDelta, pointDelta });
+}
+Drawable* pm_d_cache(vec2 pos) {
+    pos = pos * PM_CACHE_PRECISION;
+
+    // std::array<float, 4> all;
+    // int nearest = 0;
+    // for (int i = 0; i < 4; i++) {
+    //     all[i] = (pos - abs_point_around(pos, i)).sqr_mag();
+    //     for (int j = 0; j < i; j++) {
+    //         if (all[i] < all[j]) {
+    //             nearest = i;
+    //         }
+    //     }
+    // }
+
+    return pointmarchingDrawableCache[get_pm_index(abs_point_around(pos, 0))];
+}
+float& direct_pm_cache(vec2 pos) {
+    return pointmarchingCache[get_pm_index(pos)];
+}
+Drawable** direct_pm_d_cache(vec2 pos) {
+    return pointmarchingDrawableCache + get_pm_index(pos);
+}
+void precalc_pm_cache() {
+    vec2 it;
+    Drawable* d;
+    for (it.x = 0; it.x < PM_CACHE_WIDTH; it.x++) {
+        fflush(stdout);
+        for (it.y = 0; it.y < PM_CACHE_HEIGHT; it.y++) {
+            direct_pm_cache(it) = get_min_dist(it / PM_CACHE_PRECISION, &d);
+            *direct_pm_d_cache(it) = d;
+        }
+        printf("\rto a percentage of %.2f done", it.x / static_cast<float>(PM_CACHE_WIDTH));
+    }
+    printf("\n");
+}
+
+bool march_ray_cache(vec2 pos, vec2 delta, RayHitInfo* hit, float maxDepth = 100.f, float threshold = 0.01f, uint16_t maxSteps = 50) {
+    float min;
+    int depth { 0 };
+    delta.normalize();
+    hit->hit = false;
+    do {
+        min = pm_cache(pos);
+        if (min <= 1.5f / PM_CACHE_PRECISION) {
+            min = pm_d_cache(pos)->sdf(pos);
+            // min = get_min_dist(pos);
+        }
+        if (min <= threshold) {
+            hit->hit = true;
+            break;
+        }
+        pos = pos + delta * min;
+        hit->distance += min;
+        depth++;
+    } while (depth < maxSteps && clip(pos.x, 0, WINDOW_WIDTH - 1) == pos.x && clip(pos.y, 0, WINDOW_HEIGHT - 1) == pos.y && min >= threshold);
     hit->pos = pos;
     return hit->hit;
 }
@@ -308,22 +427,16 @@ void draw() {
         
         for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
             RayHitInfo hit;
-            march_ray(l->pos, light_directions[i], &hit);
-            //auto pos = march_ray_light(l->pos, light_directions[i]);
+            march_ray_cache(l->pos, light_directions[i], &hit);
             
             polygons.back().posX.push_back(hit.pos.x);
             polygons.back().posY.push_back(hit.pos.y);
+
+            //SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            //SDL_RenderDrawPoint(renderer, hit.pos.x, hit.pos.y);
         }
         for (auto p : polygons) {
             filledPolygonRGBA(renderer, p.posX.data(), p.posY.data(), p.posX.size(), 255, 255, 255, 255);
-            
-            // std::vector<SDL_Point> points;
-            // for (int i = 0; i < p.posX.size(); i++) {
-            //     if (p.posX[i] == 0 || p.posY[i] == 0)
-            //         continue;
-            //     points.push_back( { p.posX[i], p.posY[i] } );
-            // }
-            // SDL_RenderDrawLines(renderer, points.data(), points.size());
         }
         filledCircleRGBA(renderer, l->pos.x, l->pos.y, 10, 0, 255, 0, 255);
     }
@@ -361,6 +474,8 @@ int main() {
     for (int i = 0; i < LIGHT_DIR_COUNT; i++) {
         light_directions[i] = { static_cast<float>(cos(static_cast<float>(i) / LIGHT_DIR_COUNT * 2 * PI)), static_cast<float>(sin(static_cast<float>(i) / LIGHT_DIR_COUNT * 2 * PI)) };
     }
+    // pre-calculate the pointmarching cache for raymarching
+    precalc_pm_cache();
 
     // workaround player
     drawables.emplace_back(new Circle{ { WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 }, 30 });
@@ -379,6 +494,14 @@ int main() {
         SDL_SetRenderDrawColor(renderer, DEF_BG_COL_R, DEF_BG_COL_G, DEF_BG_COL_B, DEF_BG_COL_A);
         SDL_RenderClear(renderer);
         SDL_SetRenderDrawColor(renderer, DEF_COL_R, DEF_COL_G, DEF_COL_B, DEF_COL_A);
+
+        // for (int x = 0; x < WINDOW_WIDTH; x++) {
+        //     for (int y = 0; y < WINDOW_HEIGHT; y++) {
+        //         float c = pm_cache({(float)x, (float)y});
+        //         SDL_SetRenderDrawColor(renderer, c, c, c, 255);
+        //         SDL_RenderDrawPoint(renderer, x, y);
+        //     }
+        // }
 
         // you may guess 3 times
         draw();
